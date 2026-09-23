@@ -52,10 +52,10 @@ class CriticAgent:
             max_tokens=800,
         )
 
-        print(
-            "\n===== Raw Critic Output ====="
-        )
-        print(repr(content))
+        # print(
+        #     "\n===== Raw Critic Output ====="
+        # )
+        # print(repr(content))
 
         data = json.loads(
             clean_json_text(content)
@@ -269,8 +269,8 @@ class CriticAgent:
             max_tokens=800,
         )
 
-        print("\n===== Raw Incremental Critic Output =====")
-        print(repr(content))
+        # print("\n===== Raw Incremental Critic Output =====")
+        # print(repr(content))
 
         data = json.loads(
             clean_json_text(
