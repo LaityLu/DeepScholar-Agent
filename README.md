@@ -1,8 +1,8 @@
-CUDA_VISIBLE_DEVICES=0  \
+CUDA_VISIBLE_DEVICES=4  \
 VLLM_USE_FLASHINFER_SAMPLER=0  \
 uv run vllm serve ./model/Qwen3.5-4B  \
 --served-model-name Qwen3.5-4B  \
---max-model-len 4096  \
+--max-model-len 8192  \
 --gpu-memory-utilization 0.30  \
 --enforce-eager  \
 --reasoning-parser qwen3  \

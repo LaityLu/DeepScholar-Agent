@@ -7,6 +7,7 @@ from deepscholar.models.research import (
     ResearchTask,
     SourceType,
 )
+from deepscholar.utils.structured_output import clean_json_text
 
 
 class PlannerAgent:
@@ -45,8 +46,14 @@ class PlannerAgent:
             ],
             temperature=0,
         )
+
+        print(
+            "\n===== Raw Planner Output ====="
+        )
+        print(repr(content))
+        
         data = json.loads(
-            content
+            clean_json_text(content)
         )
         return self._parse_plan(
             data

@@ -17,6 +17,12 @@ class Evidence(BaseModel):
         ge=0,
         le=1,
     )
+    source_quality_score: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+    )
+    quality_label: str | None = None
 
 
 class EvidenceExtractionResult(BaseModel):

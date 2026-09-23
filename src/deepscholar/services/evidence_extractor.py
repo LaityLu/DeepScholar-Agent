@@ -15,6 +15,7 @@ from deepscholar.models.source import (
 from deepscholar.models.chunk import (
     DocumentChunk,
 )
+from deepscholar.utils.structured_output import clean_json_text
 
 
 class EvidenceExtractor:
@@ -47,7 +48,9 @@ class EvidenceExtractor:
                 },
             ]
         )
-        data = json.loads(content)
+        data = json.loads(
+            clean_json_text(content)
+        )
         evidences = []
         for item in data.get(
             "evidences",
@@ -139,7 +142,7 @@ class EvidenceExtractor:
         3. Ignore irrelevant information.
         4. relevance_score must be between 0 and 1.
         5. If no useful evidence exists, return an empty list.
-        6. Return at most 5 high-quality evidence items.
+        6. Return at most 3 high-quality evidence items.
         7. Return JSON only.
         """
 

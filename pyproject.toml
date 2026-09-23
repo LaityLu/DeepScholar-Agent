@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "langchain-text-splitters>=1.1.2",
+    "langgraph>=1.2.12",
     "openai>=3.16.2",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",

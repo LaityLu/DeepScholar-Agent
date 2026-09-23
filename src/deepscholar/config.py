@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     llm_api_key: SecretStr
     llm_base_url: str
     llm_model: str
+    llm_tokenizer_path: str
+    llm_max_context_tokens: int
+    llm_max_output_tokens: int
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

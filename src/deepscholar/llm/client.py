@@ -19,7 +19,7 @@ class LLMClient:
         self,
         messages: list[dict],
         temperature: float = 0,
-        max_tokens: int = 1000
+        max_tokens: int = 800
     ) -> str:
         response = (
             self.client

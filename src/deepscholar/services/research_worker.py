@@ -1,6 +1,9 @@
 from deepscholar.models.chunk import (
     DocumentChunk,
 )
+from deepscholar.services.context_builder import (
+    ContextBuilder,
+)
 from deepscholar.models.research import (
     ResearchTask,
 )
@@ -35,6 +38,7 @@ class ResearchWorker:
         chunker: DocumentChunker,
         selector: HybridChunkSelector,
         extractor: EvidenceExtractor,
+        context_builder: ContextBuilder,
         max_sources: int = 5,
     ):
         self.search_tool = search_tool
@@ -42,6 +46,7 @@ class ResearchWorker:
         self.chunker = chunker
         self.selector = selector
         self.extractor = extractor
+        self.context_builder = context_builder
         self.max_sources = max_sources
 
     def run(
@@ -117,10 +122,14 @@ class ResearchWorker:
         )
         if not candidates:
             return []
-        selected_chunks = [
-            candidate.chunk
-            for candidate in candidates
-        ]
+        selected_chunks = (
+            self.context_builder
+            .select_chunks(
+                candidates
+            )
+        )
+        if not selected_chunks:
+            return []
         extraction_result = (
             self.extractor
             .extract_from_chunks(

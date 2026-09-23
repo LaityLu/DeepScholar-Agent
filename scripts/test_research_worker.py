@@ -1,7 +1,9 @@
 from deepscholar.config import (
     settings,
 )
-
+from deepscholar.services.context_builder import (
+    ContextBuilder,
+)
 from deepscholar.llm.client import (
     LLMClient,
 )
@@ -37,6 +39,18 @@ from deepscholar.tools.web_search import (
 
 
 def main():
+    context_builder = ContextBuilder(
+        tokenizer_path=(
+            settings.llm_tokenizer_path
+        ),
+        max_context_tokens=(
+            settings.llm_max_context_tokens
+        ),
+        reserved_prompt_tokens=700,
+        reserved_output_tokens=(
+            settings.llm_max_output_tokens
+        ),
+    )
 
     search_tool = (
         TavilyWebSearchTool()
@@ -70,6 +84,7 @@ def main():
         chunker=chunker,
         selector=selector,
         extractor=extractor,
+        context_builder=context_builder,
         max_sources=3,
     )
 
