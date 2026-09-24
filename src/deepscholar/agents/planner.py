@@ -65,75 +65,160 @@ class PlannerAgent:
     ) -> str:
 
         return f"""
-    You are planning a deep research task.
+You are planning a deep research task.
 
-    User research request:
+User research request:
 
-    {query}
-
-
-    Create a research plan containing
-    3 to 5 independent and complementary
-    research tasks.
-
-    Each task should represent one
-    meaningful research dimension that can
-    be searched and investigated
-    independently.
-
-    For each task provide:
-
-    - title:
-    short task name
-
-    - intent:
-    what this task should determine
-
-    - query:
-    a focused search query suitable for
-    retrieving relevant technical sources
-
-    - source_type:
-    use "web" for now
+{query}
 
 
-    Planning requirements:
+Create a research plan containing
+3 to 5 independent and complementary
+research tasks.
 
-    1. Cover the important dimensions of
-    the user's research request.
+Each task should represent one
+meaningful research dimension that can
+be searched and investigated
+independently.
 
-    2. Avoid overlapping or duplicate tasks.
+For each task provide:
 
-    3. Do not make tasks too broad.
+- title:
+  short task name
 
-    4. Do not make tasks unnecessarily
-    fine-grained.
+- intent:
+  what this task should determine
 
-    5. Each task should be independently
-    executable by a research worker.
+- query:
+  a focused search query suitable for
+  the selected source type
 
-    6. Search queries should contain useful
-    technical keywords rather than simply
-    repeating the user's full request.
+- source_type:
+  choose the most appropriate source type
+  based on the research need
 
-    7. Do not answer the research question.
+
+Source type selection rules:
+
+Use PAPER for:
+- original research papers
+- model architectures
+- training methods
+- benchmark results
+- quantitative evaluations
+- ablation studies
+- technical methodology
+
+Use WEB for:
+- news
+- documentation
+- project announcements
+- product or organization information
+- broad ecosystem information
+- recent developments that may not yet
+  appear in research papers
+
+
+Query generation rules:
+
+For WEB tasks:
+- Generate a concise natural-language
+  web search query.
+- Use useful technical keywords.
+- Do not simply repeat the user's full request.
+- Prefer specific terms such as model names,
+  task names, benchmark names, methods,
+  years, or application domains when relevant.
+
+Example WEB query:
+
+"GUI agent computer use latest developments 2026"
+
+
+For PAPER tasks:
+- The query MUST be directly executable
+  by the arXiv search backend.
+- Use arXiv field syntax with Boolean operators.
+- Prefer the following format:
+
+  all:keyword1 AND all:keyword2 AND all:keyword3
+
+- Use 3 to 6 discriminative technical keywords.
+- Do not generate a full natural-language question.
+- Do not include unnecessary stop words such as:
+  the, a, an, of, for, to, latest, research.
+- Avoid quoted phrases unless truly necessary.
+- Prefer English technical keywords.
+- Use AND to combine the major concepts.
+
+Good PAPER query examples:
+
+all:GUI AND all:agent AND all:multimodal
+
+all:GUI AND all:agent AND all:reinforcement AND all:training
+
+all:computer AND all:use AND all:agent AND all:benchmark
+
+Bad PAPER query examples:
+
+"What are the latest GUI agent training methods?"
+
+"Research GUI agents in 2025-2026"
+
+"latest multimodal GUI agent papers"
+
+
+Planning requirements:
+
+1. Cover the important dimensions of
+   the user's research request.
+
+2. Avoid overlapping or duplicate tasks.
+
+3. Do not make tasks too broad.
+
+4. Do not make tasks unnecessarily
+   fine-grained.
+
+5. Each task should be independently
+   executable by a research worker.
+
+6. Match the query format to the selected
+   source_type.
+
+7. PAPER queries must already be valid
+   arXiv-style search queries and must not
+   require additional rewriting by the
+   research worker.
+
+8. WEB queries should remain concise,
+   readable search queries.
+
+9. Prefer PAPER when the task mainly needs
+   primary technical evidence.
+
+10. Prefer WEB when the task mainly needs
+    ecosystem-level or announcement-level
+    information.
+
+11. Do not answer the research question.
     Only create the research plan.
 
 
-    Return valid JSON only:
+Return valid JSON only:
 
+{{
+  "goal": "normalized overall research goal",
+  "tasks": [
     {{
-    "goal": "normalized overall research goal",
-    "tasks": [
-        {{
-        "title": "...",
-        "intent": "...",
-        "query": "...",
-        "source_type": "web"
-        }}
-    ]
+      "title": "...",
+      "intent": "...",
+      "query": "...",
+      "source_type": "paper"
     }}
-    """
+  ]
+}}
+""".strip()
 
     def _parse_plan(
         self,

@@ -23,8 +23,8 @@ from deepscholar.services.chunk_selector import (
 from deepscholar.services.evidence_extractor import (
     EvidenceExtractor,
 )
+from deepscholar.services.tool_router import ResearchToolRouter
 from deepscholar.tools.base import (
-    BaseSearchTool,
     BaseSourceFetcher,
 )
 
@@ -33,16 +33,14 @@ from deepscholar.tools.base import (
 class ResearchWorker:
     def __init__(
         self,
-        search_tool: BaseSearchTool,
-        fetcher: BaseSourceFetcher,
+        tool_router: ResearchToolRouter,
         chunker: DocumentChunker,
         selector: HybridChunkSelector,
         extractor: EvidenceExtractor,
         context_builder: ContextBuilder,
         max_sources: int = 5,
     ):
-        self.search_tool = search_tool
-        self.fetcher = fetcher
+        self.tool_router = tool_router
         self.chunker = chunker
         self.selector = selector
         self.extractor = extractor
@@ -53,8 +51,31 @@ class ResearchWorker:
         self,
         task: ResearchTask,
     ) -> ResearchWorkerResult:
+
+        try:
+            return self._run_task(task)
+        except Exception as exc:
+            error = str(exc) or type(exc).__name__
+
+            return ResearchWorkerResult(
+                task_id=task.id,
+                query=task.query,
+                evidences=[],
+                searched_sources=0,
+                processed_sources=0,
+                failed_sources=[],
+                error=error,
+            )
+
+    def _run_task(
+        self,
+        task: ResearchTask,
+    ) -> ResearchWorkerResult:
+        tools = self.tool_router.resolve(
+            task.source_type
+        )
         search_response = (
-            self.search_tool.search(
+            tools.search_tool.search(
                 query=task.query,
                 max_results=self.max_sources,
             )
@@ -70,6 +91,7 @@ class ResearchWorker:
                     self._process_source(
                         task=task,
                         search_result=search_result,
+                        fetcher=tools.fetcher,
                     )
                 )
                 all_evidences.extend(
@@ -94,15 +116,17 @@ class ResearchWorker:
                 processed_sources
             ),
             failed_sources=failed_sources,
+            error=None,
         )
 
     def _process_source(
         self,
         task: ResearchTask,
         search_result: SearchResult,
+        fetcher: BaseSourceFetcher,
     ):
 
-        document = self.fetcher.fetch(
+        document = fetcher.fetch(
             search_result.url
         )
         if not document.title:

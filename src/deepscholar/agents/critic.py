@@ -105,90 +105,211 @@ class CriticAgent:
         )
         
         return f"""
-    You are evaluating the coverage of a
-    deep research process.
+Evaluate whether the collected evidence is sufficient
+to answer the ORIGINAL research goal at a useful
+research-report level.
 
-    Overall research goal:
+The purpose of this evaluation is NOT to determine
+whether every possible technical detail has been
+researched.
 
-    {plan.goal}
-
-
-    Planned research tasks:
-
-    {tasks_text}
-
-
-    Collected evidence:
-
-    {evidence_text}
+The purpose is to determine whether the user can now
+receive a useful, evidence-grounded answer to the
+original research request.
 
 
-    Evaluate whether the current evidence
-    is sufficient to answer the overall
+==================================================
+ORIGINAL RESEARCH GOAL
+==================================================
+
+{plan.goal}
+
+
+==================================================
+PLANNED RESEARCH TASKS
+==================================================
+
+{tasks_text}
+
+
+==================================================
+COLLECTED EVIDENCE
+==================================================
+
+{evidence_text}
+
+
+==================================================
+CORE EVALUATION PRINCIPLE
+==================================================
+
+Judge sufficiency against the ORIGINAL research goal,
+not against an ideal exhaustive academic survey.
+
+The research should be considered sufficient when the
+major dimensions explicitly requested or materially
+implied by the original goal have useful supporting
+evidence.
+
+Do NOT keep expanding the research simply because more
+technical details could theoretically be investigated.
+
+
+==================================================
+SUFFICIENCY RULES
+==================================================
+
+1. Focus on the original research goal.
+
+   Ask:
+
+   - What major dimensions did the user actually request?
+   - Does the evidence support a useful discussion of
+     those dimensions?
+
+2. Prefer sufficient=true when all major requested
+   dimensions have reasonable supporting evidence.
+
+3. The research does NOT need to be exhaustive.
+
+4. Minor missing details must NOT cause
+   sufficient=false.
+
+5. Implementation-level details should normally NOT be
+   treated as blocking knowledge gaps unless the
+   original research goal explicitly requests them.
+
+6. The following are normally NON-BLOCKING details:
+
+   - exact reward-function formulas
+   - exact training hyperparameters
+   - exact teacher-model identities
+   - distillation implementation details
+   - transfer-fidelity metrics
+   - exact optimizer settings
+   - exhaustive benchmark scores
+   - exhaustive ablation results
+   - exhaustive pairwise model comparisons
+   - complete architectural implementation details
+
+7. Do NOT introduce new research requirements merely
+   because the collected evidence mentions an interesting
+   technique or subtopic.
+
+8. A knowledge gap should be reported ONLY if its absence
+   materially prevents answering an important part of the
+   original research goal.
+
+9. If a missing detail would only make the final report
+   more comprehensive, but the report can already answer
+   the user's main question, it is NOT a blocking gap.
+
+10. Do not require direct comparisons between every pair
+    of systems unless comparison is explicitly central to
+    the original goal.
+
+11. If representative examples are available for a major
+    research dimension, exhaustive examples are not
+    required.
+
+12. If evidence supports a meaningful qualitative
+    synthesis but lacks every possible quantitative
+    detail, the research may still be sufficient.
+
+13. coverage_score measures coverage of the ORIGINAL
     research goal.
 
-    Focus on research coverage rather than
-    the number of evidence items.
+    Suggested interpretation:
 
-    A research plan is sufficient only when:
+    0.00 - 0.39:
+        Major requested dimensions are missing.
 
-    1. The major research dimensions are
-    adequately covered.
+    0.40 - 0.69:
+        Partial coverage. Important user-requested
+        dimensions remain weak or missing.
 
-    2. Important user-requested dimensions
-    are not missing.
+    0.70 - 0.84:
+        Most major requested dimensions are adequately
+        covered and a useful report can be written.
 
-    3. The evidence is specific enough to
-    support meaningful conclusions.
+    0.85 - 1.00:
+        Strong coverage of the requested research goal.
 
-    4. Evidence is not merely repetitive
-    statements of the same fact.
+14. Do NOT artificially keep coverage_score low because
+    obscure technical details remain unavailable.
 
-    5. Missing information would not
-    materially change the final report.
-
-
-    Return valid JSON only:
-
-    {{
-    "sufficient": false,
-    "coverage_score": 0.0,
-    "covered_aspects": [
-        "..."
-    ],
-    "knowledge_gaps": [
-        "..."
-    ],
-    "assessment": "..."
-    }}
+15. It is acceptable to return sufficient=true even when
+    some secondary details remain unknown.
 
 
-    Requirements:
+==================================================
+KNOWLEDGE GAP RULES
+==================================================
 
-    - coverage_score must be between 0 and 1.
+knowledge_gaps must contain ONLY major missing
+information necessary to answer the original research
+goal.
 
-    - covered_aspects should list research
-    dimensions that are adequately
-    supported.
+Good knowledge gap:
 
-    - knowledge_gaps should describe
-    concrete missing information that
-    should be researched next.
+"The research goal asks for benchmark comparison, but
+the evidence contains no benchmark results."
 
-    - If sufficient is true,
-    knowledge_gaps should normally be
-    empty.
+Bad knowledge gap:
 
-    - Do not propose a new research plan.
+"The exact reward coefficient used by one model is not
+available."
 
-    - Do not write the final research
-    report.
+Bad knowledge gap:
 
-    - Do not invent information that is not
-    present in the evidence.
+"The teacher model used in one distillation stage is
+not identified."
 
-    - assessment should be concise.
-    """
+Bad knowledge gap:
+
+"No direct comparison exists between every model
+mentioned in the evidence."
+
+
+==================================================
+FINAL DECISION
+==================================================
+
+Before returning sufficient=false, explicitly ask:
+
+"Would the absence of this information prevent a useful
+and responsible final report from answering the user's
+original research question?"
+
+If the answer is NO, do not use that missing detail as
+a reason for sufficient=false.
+
+
+Return exactly one JSON object:
+
+{{
+  "sufficient": true,
+  "coverage_score": 0.8,
+  "covered_aspects": [
+    "..."
+  ],
+  "knowledge_gaps": [],
+  "assessment": "..."
+}}
+
+Requirements:
+
+- sufficient must be a boolean.
+- coverage_score must be between 0 and 1.
+- covered_aspects should summarize the major dimensions
+  already supported by evidence.
+- knowledge_gaps should contain only materially important
+  unresolved gaps.
+- assessment should briefly explain why the research is
+  or is not sufficient.
+
+Return JSON only.
+""".strip()
 
     def _parse_result(
         self,
@@ -343,101 +464,180 @@ class CriticAgent:
         )
 
         return f"""
-    You are performing an incremental
-    evaluation of an ongoing deep research
-    process.
+Perform an INCREMENTAL evaluation of research coverage.
 
-    Overall research goal:
+Do NOT restart the research evaluation from scratch.
 
-    {plan.goal}
-
-
-    Previously covered aspects:
-
-    {covered_text}
+Use the previous critique as a compact summary of the
+earlier research state, and determine whether the NEW
+research is sufficient to produce a useful final report
+for the ORIGINAL research goal.
 
 
-    Knowledge gaps identified in the
-    previous evaluation:
+==================================================
+ORIGINAL RESEARCH GOAL
+==================================================
 
-    {gaps_text}
-
-
-    New research tasks created to address
-    those gaps:
-
-    {tasks_text}
+{plan.goal}
 
 
-    Newly collected evidence:
+==================================================
+PREVIOUSLY COVERED ASPECTS
+==================================================
 
-    {evidence_text}
+{covered_text}
 
 
-    Evaluate whether the NEW evidence
-    resolves the PREVIOUS knowledge gaps.
+==================================================
+PREVIOUS KNOWLEDGE GAPS
+==================================================
 
-    Important rules:
+{gaps_text}
 
-    1. Use the previous knowledge gaps as
-    the primary evaluation checklist.
 
-    2. Do not restart the research
-    evaluation from scratch.
+==================================================
+NEW RESEARCH TASKS
+==================================================
 
-    3. Do not introduce unrelated new
-    research dimensions.
+{tasks_text}
 
-    4. A previous knowledge gap may remain
-    unresolved if the new evidence is
-    weak, indirect, or from insufficiently
-    relevant sources.
 
-    5. Previously covered aspects should
-    remain covered unless the new evidence
-    directly contradicts them.
+==================================================
+NEW EVIDENCE
+==================================================
 
-    6. The final sufficient decision should
-    reflect whether the original research
-    goal can now be answered with adequate
+{evidence_text}
+
+
+==================================================
+CORE INCREMENTAL EVALUATION PRINCIPLE
+==================================================
+
+Evaluate whether the ORIGINAL research goal can now be
+answered adequately.
+
+Previous knowledge gaps are NOT automatically mandatory
+requirements.
+
+You must reconsider whether each previous gap was truly
+important to the original research goal.
+
+
+==================================================
+INCREMENTAL EVALUATION RULES
+==================================================
+
+1. Treat previously covered aspects as still covered
+   unless the new evidence directly contradicts them.
+
+2. Use previous knowledge gaps as a reference checklist,
+   NOT as mandatory research requirements.
+
+3. Remove a previous knowledge gap if it is:
+
+   - implementation-level
+   - overly specific
+   - peripheral
+   - merely interesting
+   - unnecessary for answering the original goal
+
+4. Do NOT preserve a previous gap simply because it was
+   previously listed.
+
+5. Do NOT introduce new research dimensions unless their
+   absence materially prevents answering the original
+   research goal.
+
+6. Do NOT create new gaps merely because the new evidence
+   mentions additional methods, models, benchmarks, or
+   technical details.
+
+7. The following should normally NOT block completion
+   unless explicitly requested by the original goal:
+
+   - exact reward formulas
+   - training hyperparameters
+   - teacher-model selection details
+   - transfer-fidelity metrics
+   - optimizer details
+   - exhaustive ablation studies
+   - exhaustive benchmark values
+   - exhaustive model-by-model comparisons
+
+8. A previous gap may be considered resolved when the new
+   evidence provides enough information for a useful
+   research-level discussion.
+
+   Perfect or exhaustive evidence is NOT required.
+
+9. Minor unresolved details should not force
+   sufficient=false.
+
+10. If the major research dimensions requested by the
+    original goal are now adequately covered, return
+    sufficient=true.
+
+11. knowledge_gaps should contain ONLY unresolved gaps
+    that still materially prevent the final report from
+    answering the original goal.
+
+12. covered_aspects should be cumulative:
+
+    previously covered aspects
+    +
+    newly resolved important aspects.
+
+13. coverage_score is cumulative coverage of the
+    ORIGINAL research goal.
+
+    It is NOT a score for the quality of only the new
     evidence.
 
-    7. Minor secondary details should not
-    prevent sufficient=true.
+14. coverage_score should normally increase when the new
+    evidence materially resolves previous gaps.
 
-    Return exactly one JSON object with:
+15. Do not keep coverage_score unchanged simply because
+    implementation-level details remain unavailable.
 
-    {{
-    "sufficient": false,
-    "coverage_score": 0.0,
-    "covered_aspects": [
-        "..."
-    ],
-    "knowledge_gaps": [
-        "..."
-    ],
-    "assessment": "..."
-    }}
+16. It is acceptable to return sufficient=true while
+    mentioning secondary missing details in the
+    assessment.
 
-    Interpretation:
 
-    - covered_aspects:
-    Return the cumulative aspects now
-    considered adequately covered,
-    including previously covered aspects.
+==================================================
+IMPORTANT DECISION TEST
+==================================================
 
-    - knowledge_gaps:
-    Return only the previous gaps that
-    still remain materially unresolved.
+Before keeping any item in knowledge_gaps, ask:
 
-    - coverage_score:
-    Estimate cumulative research coverage,
-    not merely the quality of this new
-    batch.
+"If this information remains unavailable, can the final
+report still provide a useful and evidence-grounded
+answer to the user's original research request?"
 
-    - assessment:
-    Briefly state which previous gaps were
-    resolved and which remain.
+If YES:
 
-    Return JSON only.
-    """
+Do NOT keep it as a blocking knowledge gap.
+
+If NO:
+
+Keep it as a knowledge gap.
+
+
+==================================================
+OUTPUT
+==================================================
+
+Return exactly one JSON object:
+
+{{
+  "sufficient": true,
+  "coverage_score": 0.85,
+  "covered_aspects": [
+    "..."
+  ],
+  "knowledge_gaps": [],
+  "assessment": "..."
+}}
+
+Return JSON only.
+""".strip()

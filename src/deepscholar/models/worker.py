@@ -16,3 +16,4 @@ class ResearchWorkerResult(BaseModel):
     searched_sources: int
     processed_sources: int
     failed_sources: list[SourceFailure]
+    error: str | None = None

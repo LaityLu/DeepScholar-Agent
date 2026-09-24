@@ -13,6 +13,7 @@ from deepscholar.models.evidence import (
 
 from deepscholar.models.research import (
     ResearchPlan,
+    ResearchTask
 )
 
 from deepscholar.models.worker import (
@@ -20,11 +21,14 @@ from deepscholar.models.worker import (
 )
 
 
+class ResearchTaskState(TypedDict):
+    task: ResearchTask
+
+
 class ResearchState(TypedDict):
 
     user_query: str
     plan: ResearchPlan | None
-    current_task_index: int
     worker_results: Annotated[
         list[ResearchWorkerResult],
         operator.add,
@@ -49,3 +53,4 @@ class ResearchState(TypedDict):
     verified_claims: list[Claim]
 
     report: str | None
+

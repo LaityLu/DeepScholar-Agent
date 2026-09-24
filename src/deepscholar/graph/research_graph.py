@@ -3,6 +3,7 @@ from langgraph.graph import (
     START,
     StateGraph,
 )
+from langgraph.types import Send
 
 from deepscholar.agents.citation_verifier import (
     CitationVerifierAgent,
@@ -12,13 +13,16 @@ from deepscholar.agents.claim_generator import (
 )
 from deepscholar.agents.critic import CriticAgent
 from deepscholar.agents.planner import PlannerAgent
-from deepscholar.agents.report_writer import (
-    ReportWriterAgent,
-)
 from deepscholar.agents.replanner import (
     ReplannerAgent,
 )
-from deepscholar.graph.state import ResearchState
+from deepscholar.agents.report_writer import (
+    ReportWriterAgent,
+)
+from deepscholar.graph.state import (
+    ResearchState,
+    ResearchTaskState,
+)
 from deepscholar.models.citation import (
     VerifiedClaim,
 )
@@ -31,39 +35,6 @@ from deepscholar.services.research_worker import (
 
 
 class ResearchGraph:
-    """
-    Main DeepScholar research workflow.
-
-    Workflow:
-
-    Planner
-        ↓
-    Research
-        ↓
-    Critic
-        ↓
-    ┌──────── sufficient ──────────┐
-    │                              │
-    │                         EvidenceProcessor
-    │                              ↓
-    │                         ClaimGenerator
-    │                              ↓
-    │                       CitationVerifier
-    │                              ↓
-    │                         ReportWriter
-    │                              ↓
-    │                             END
-    │
-    └─ insufficient
-           ↓
-       Replanner
-           ↓
-       Research
-           ↓
-    Incremental Critic
-           ↓
-          ...
-    """
 
     def __init__(
         self,
@@ -97,18 +68,21 @@ class ResearchGraph:
             report_writer
         )
 
-    def build(self):
-        """
-        Build and compile the LangGraph workflow.
-        """
+    # ==================================================
+    # Build Graph
+    # ==================================================
 
+    def build(
+        self,
+        checkpointer=None,
+    ):
         builder = StateGraph(
             ResearchState
         )
 
-        # -------------------------
+        # ------------------------------------------------
         # Nodes
-        # -------------------------
+        # ------------------------------------------------
 
         builder.add_node(
             "planner",
@@ -128,6 +102,12 @@ class ResearchGraph:
         builder.add_node(
             "replanner",
             self._replanner_node,
+        )
+
+        # Replanner 后用于触发新一轮 Send。
+        builder.add_node(
+            "replan_dispatch",
+            self._replan_dispatch_node,
         )
 
         builder.add_node(
@@ -150,31 +130,48 @@ class ResearchGraph:
             self._report_writer_node,
         )
 
-        # -------------------------
-        # Main research flow
-        # -------------------------
+        # ------------------------------------------------
+        # START → Planner
+        # ------------------------------------------------
 
         builder.add_edge(
             START,
             "planner",
         )
 
-        builder.add_edge(
-            "planner",
-            "research",
-        )
+        # ------------------------------------------------
+        # Planner
+        # ↓
+        # Send(task_001)
+        # Send(task_002)
+        # ...
+        # ------------------------------------------------
 
-        # Run research tasks sequentially.
         builder.add_conditional_edges(
-            "research",
-            self._route_after_research,
-            {
-                "continue": "research",
-                "critic": "critic",
-            },
+            "planner",
+            self._dispatch_initial_research,
         )
 
-        # Critic decides whether more research is needed.
+        # ------------------------------------------------
+        # Parallel Research
+        #
+        # 所有 Research 分支写入：
+        #
+        # worker_results
+        # evidences
+        #
+        # 通过 reducer 聚合。
+        # ------------------------------------------------
+
+        builder.add_edge(
+            "research",
+            "critic",
+        )
+
+        # ------------------------------------------------
+        # Critic
+        # ------------------------------------------------
+
         builder.add_conditional_edges(
             "critic",
             self._route_after_critic,
@@ -189,25 +186,37 @@ class ResearchGraph:
             },
         )
 
-        # Replanner may create incremental tasks.
+        # ------------------------------------------------
+        # Replanner
+        # ------------------------------------------------
+
         builder.add_conditional_edges(
             "replanner",
             self._route_after_replanner,
             {
-                "research": "research",
-
-                # If no useful new tasks can be produced,
-                # continue with the best available evidence
-                # rather than terminating without a report.
+                "dispatch": (
+                    "replan_dispatch"
+                ),
                 "complete": (
                     "evidence_processor"
                 ),
             },
         )
 
-        # -------------------------
-        # Report generation flow
-        # -------------------------
+        # ------------------------------------------------
+        # Replan Dispatch
+        #
+        # 新任务再次 fan-out。
+        # ------------------------------------------------
+
+        builder.add_conditional_edges(
+            "replan_dispatch",
+            self._dispatch_replanned_research,
+        )
+
+        # ------------------------------------------------
+        # Final pipeline
+        # ------------------------------------------------
 
         builder.add_edge(
             "evidence_processor",
@@ -229,19 +238,22 @@ class ResearchGraph:
             END,
         )
 
-        return builder.compile()
+        return builder.compile(
+            checkpointer=checkpointer
+        )
 
-    # =====================================================
+    # ==================================================
     # Planner
-    # =====================================================
+    # ==================================================
 
     def _planner_node(
         self,
         state: ResearchState,
     ) -> dict:
-        """
-        Generate the initial research plan.
-        """
+
+        print(
+            "\n[Graph] Enter Planner"
+        )
 
         plan = self.planner.plan(
             state["user_query"]
@@ -249,23 +261,16 @@ class ResearchGraph:
 
         return {
             "plan": plan,
-            "current_task_index": 0,
         }
 
-    # =====================================================
-    # Research
-    # =====================================================
+    # ==================================================
+    # Initial Parallel Dispatch
+    # ==================================================
 
-    def _research_node(
-        self,
+    @staticmethod
+    def _dispatch_initial_research(
         state: ResearchState,
-    ) -> dict:
-        """
-        Execute exactly one ResearchTask.
-
-        The node intentionally does not hide a Python loop.
-        One graph iteration corresponds to one research task.
-        """
+    ) -> list[Send]:
 
         plan = state["plan"]
 
@@ -274,25 +279,60 @@ class ResearchGraph:
                 "Research plan is missing."
             )
 
-        index = state[
-            "current_task_index"
-        ]
-
-        if index >= len(plan.tasks):
+        if not plan.tasks:
             raise RuntimeError(
-                "Research task index is out of range."
+                "Research plan contains no tasks."
             )
 
-        task = plan.tasks[index]
+        print(
+            f"\n[Graph] Dispatching "
+            f"{len(plan.tasks)} initial "
+            f"research tasks"
+        )
+
+        return [
+            Send(
+                "research",
+                {
+                    "task": task,
+                },
+            )
+            for task in plan.tasks
+        ]
+
+    # ==================================================
+    # Parallel Research Worker
+    # ==================================================
+
+    def _research_node(
+        self,
+        state: ResearchTaskState,
+    ) -> dict:
+
+        task = state["task"]
+
+        print(
+            f"\n[Research] START "
+            f"{task.id}: {task.title}"
+        )
 
         result = self.worker.run(
             task
         )
 
+        if result.error:
+            print(
+                f"\n[Research] FAILED "
+                f"{task.id}: {result.error}"
+            )
+        else:
+            print(
+                f"\n[Research] DONE "
+                f"{task.id} "
+                f"Evidence={len(result.evidences)}"
+            )
+
         return {
-            "current_task_index": (
-                index + 1
-            ),
             "worker_results": [
                 result
             ],
@@ -301,44 +341,18 @@ class ResearchGraph:
             ),
         }
 
-    @staticmethod
-    def _route_after_research(
-        state: ResearchState,
-    ) -> str:
-        """
-        Continue executing tasks until all tasks in the
-        current plan have been processed.
-        """
-
-        plan = state["plan"]
-
-        if plan is None:
-            raise RuntimeError(
-                "Research plan is missing."
-            )
-
-        if (
-            state["current_task_index"]
-            < len(plan.tasks)
-        ):
-            return "continue"
-
-        return "critic"
-
-    # =====================================================
+    # ==================================================
     # Critic
-    # =====================================================
+    # ==================================================
 
     def _critic_node(
         self,
         state: ResearchState,
     ) -> dict:
-        """
-        Run either:
 
-        - global evaluation for the first Critic round
-        - incremental evaluation after replanning
-        """
+        print(
+            "\n[Graph] Enter Critic"
+        )
 
         plan = state["plan"]
 
@@ -351,11 +365,12 @@ class ResearchGraph:
             "previous_critique"
         ]
 
-        # ---------------------------------------------
-        # First-round global Critic
-        # ---------------------------------------------
+        # ------------------------------------------------
+        # First global Critic
+        # ------------------------------------------------
 
         if previous_critique is None:
+
             critique = self.critic.evaluate(
                 plan=plan,
                 evidences=state[
@@ -363,11 +378,12 @@ class ResearchGraph:
                 ],
             )
 
-        # ---------------------------------------------
+        # ------------------------------------------------
         # Incremental Critic
-        # ---------------------------------------------
+        # ------------------------------------------------
 
         else:
+
             start_index = state[
                 "last_critic_task_index"
             ]
@@ -406,22 +422,19 @@ class ResearchGraph:
         return {
             "critique": critique,
 
-            # Everything currently in the plan has now
-            # been evaluated by the Critic.
             "last_critic_task_index": (
                 len(plan.tasks)
             ),
         }
 
+    # ==================================================
+    # Critic Router
+    # ==================================================
+
     @staticmethod
     def _route_after_critic(
         state: ResearchState,
     ) -> str:
-        """
-        Decide whether research is complete,
-        should be replanned, or has exhausted
-        its research budget.
-        """
 
         critique = state[
             "critique"
@@ -443,21 +456,24 @@ class ResearchGraph:
 
         return "replan"
 
-    # =====================================================
+    # ==================================================
     # Replanner
-    # =====================================================
+    # ==================================================
 
     def _replanner_node(
         self,
         state: ResearchState,
     ) -> dict:
-        """
-        Generate incremental ResearchTasks from the
-        current Critic knowledge gaps.
-        """
+
+        print(
+            "\n[Graph] Enter Replanner"
+        )
 
         plan = state["plan"]
-        critique = state["critique"]
+
+        critique = state[
+            "critique"
+        ]
 
         if plan is None:
             raise RuntimeError(
@@ -478,28 +494,27 @@ class ResearchGraph:
             state["replan_count"] + 1
         )
 
-        # ---------------------------------------------
-        # No useful new tasks
-        # ---------------------------------------------
+        # ------------------------------------------------
+        # No new tasks
+        # ------------------------------------------------
 
         if not result.new_tasks:
+
             return {
                 "previous_critique": (
                     critique
                 ),
+
                 "has_new_tasks": False,
+
                 "replan_count": (
                     next_replan_count
                 ),
             }
 
-        # ---------------------------------------------
-        # Append incremental tasks
-        # ---------------------------------------------
-
-        old_task_count = len(
-            plan.tasks
-        )
+        # ------------------------------------------------
+        # Append new tasks
+        # ------------------------------------------------
 
         new_plan = plan.model_copy(
             update={
@@ -513,20 +528,14 @@ class ResearchGraph:
         return {
             "plan": new_plan,
 
-            # Begin research directly from the first
-            # newly appended task.
-            "current_task_index": (
-                old_task_count
-            ),
-
-            # Save Critic #N so Critic #(N+1)
-            # can perform incremental evaluation.
+            # Critic #N becomes compact memory
+            # for Critic #(N+1).
             "previous_critique": (
                 critique
             ),
 
-            # Current critique becomes stale after new
-            # research starts.
+            # Current critique becomes stale once
+            # new research begins.
             "critique": None,
 
             "has_new_tasks": True,
@@ -536,35 +545,95 @@ class ResearchGraph:
             ),
         }
 
+    # ==================================================
+    # Replanner Router
+    # ==================================================
+
     @staticmethod
     def _route_after_replanner(
         state: ResearchState,
     ) -> str:
-        """
-        Continue researching when new tasks exist.
-
-        If Replanner cannot generate useful tasks,
-        proceed using the best evidence currently
-        available.
-        """
 
         if state["has_new_tasks"]:
-            return "research"
+            return "dispatch"
 
         return "complete"
 
-    # =====================================================
+    # ==================================================
+    # Replan Dispatch Node
+    # ==================================================
+
+    @staticmethod
+    def _replan_dispatch_node(
+        state: ResearchState,
+    ) -> dict:
+        """
+        No business logic.
+
+        This node exists only to provide a clean
+        graph boundary before dynamic Send fan-out.
+        """
+
+        return {}
+
+    # ==================================================
+    # Replanned Task Parallel Dispatch
+    # ==================================================
+
+    @staticmethod
+    def _dispatch_replanned_research(
+        state: ResearchState,
+    ) -> list[Send]:
+
+        plan = state["plan"]
+
+        if plan is None:
+            raise RuntimeError(
+                "Research plan is missing."
+            )
+
+        start_index = state[
+            "last_critic_task_index"
+        ]
+
+        new_tasks = plan.tasks[
+            start_index:
+        ]
+
+        if not new_tasks:
+            raise RuntimeError(
+                "No replanned tasks available "
+                "for dispatch."
+            )
+
+        print(
+            f"\n[Graph] Dispatching "
+            f"{len(new_tasks)} replanned "
+            f"research tasks"
+        )
+
+        return [
+            Send(
+                "research",
+                {
+                    "task": task,
+                },
+            )
+            for task in new_tasks
+        ]
+
+    # ==================================================
     # Evidence Processor
-    # =====================================================
+    # ==================================================
 
     def _evidence_processor_node(
         self,
         state: ResearchState,
     ) -> dict:
-        """
-        Deduplicate, quality-score, and curate the
-        raw Evidence Pool.
-        """
+
+        print(
+            "\n[Graph] Enter EvidenceProcessor"
+        )
 
         processed_evidences = (
             self.evidence_processor.process(
@@ -584,18 +653,18 @@ class ResearchGraph:
             )
         }
 
-    # =====================================================
+    # ==================================================
     # Claim Generator
-    # =====================================================
+    # ==================================================
 
     def _claim_generator_node(
         self,
         state: ResearchState,
     ) -> dict:
-        """
-        Generate atomic factual claims from curated
-        evidence.
-        """
+
+        print(
+            "\n[Graph] Enter ClaimGenerator"
+        )
 
         plan = state["plan"]
 
@@ -631,21 +700,22 @@ class ResearchGraph:
             "claims": claims
         }
 
-    # =====================================================
+    # ==================================================
     # Citation Verifier
-    # =====================================================
+    # ==================================================
 
     def _citation_verifier_node(
         self,
         state: ResearchState,
     ) -> dict:
-        """
-        Verify Claim -> Evidence support and construct
-        VerifiedClaims using only citations accepted by
-        the verifier.
-        """
 
-        claims = state["claims"]
+        print(
+            "\n[Graph] Enter CitationVerifier"
+        )
+
+        claims = state[
+            "claims"
+        ]
 
         processed_evidences = state[
             "processed_evidences"
@@ -716,22 +786,24 @@ class ResearchGraph:
             "citation_verification": (
                 result
             ),
+
             "verified_claims": (
                 verified_claims
             ),
         }
 
-    # =====================================================
+    # ==================================================
     # Report Writer
-    # =====================================================
+    # ==================================================
 
     def _report_writer_node(
         self,
         state: ResearchState,
     ) -> dict:
-        """
-        Generate the final evidence-grounded report.
-        """
+
+        print(
+            "\n[Graph] Enter ReportWriter"
+        )
 
         plan = state["plan"]
 
@@ -756,7 +828,9 @@ class ResearchGraph:
             evidences=state[
                 "processed_evidences"
             ],
-            critique=state["critique"],
+            critique=state[
+                "critique"
+            ],
         )
 
         if not report.strip():
