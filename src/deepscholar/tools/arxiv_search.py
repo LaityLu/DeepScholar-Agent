@@ -1,5 +1,3 @@
-import time
-
 import feedparser
 import httpx
 
@@ -14,13 +12,6 @@ from deepscholar.tools.base import BaseSearchTool
 class ArxivSearchTool(BaseSearchTool):
 
     BASE_URL = "https://export.arxiv.org/api/query"
-    RETRYABLE_STATUS_CODES = {
-        429,
-        500,
-        502,
-        503,
-        504,
-    }
 
     def __init__(
         self,
@@ -28,18 +19,10 @@ class ArxivSearchTool(BaseSearchTool):
         max_retries: int = 3,
         backoff_factor: float = 1.0,
     ):
-        if max_retries < 0:
-            raise ValueError(
-                "max_retries must be non-negative."
-            )
-
-        if backoff_factor < 0:
-            raise ValueError(
-                "backoff_factor must be non-negative."
-            )
-
-        self.max_retries = max_retries
-        self.backoff_factor = backoff_factor
+        super().__init__(
+            max_retries=max_retries,
+            backoff_factor=backoff_factor,
+        )
         self.client = httpx.Client(
             timeout=timeout,
             follow_redirects=True,
@@ -155,44 +138,20 @@ class ArxivSearchTool(BaseSearchTool):
         self,
         params: dict,
     ) -> httpx.Response:
-        for attempt in range(
-            self.max_retries + 1
-        ):
-            try:
-                response = self.client.get(
-                    self.BASE_URL,
-                    params=params,
-                )
-
-                if (
-                    response.status_code
-                    not in self.RETRYABLE_STATUS_CODES
-                ):
-                    response.raise_for_status()
-                    return response
-
-                response.raise_for_status()
-            except httpx.RequestError:
-                if attempt >= self.max_retries:
-                    raise
-            except httpx.HTTPStatusError as exc:
-                if (
-                    exc.response.status_code
-                    not in self.RETRYABLE_STATUS_CODES
-                    or attempt >= self.max_retries
-                ):
-                    raise
-
-            delay = (
-                self.backoff_factor
-                * (2 ** attempt)
-            )
-            time.sleep(delay)
-
-        raise RuntimeError(
-            "arXiv request retry loop exited "
-            "unexpectedly."
+        return self._run_with_retry(
+            lambda: self._request(params)
         )
+
+    def _request(
+        self,
+        params: dict,
+    ) -> httpx.Response:
+        response = self.client.get(
+            self.BASE_URL,
+            params=params,
+        )
+        response.raise_for_status()
+        return response
 
     @staticmethod
     def _normalize_url(

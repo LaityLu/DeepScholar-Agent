@@ -42,6 +42,8 @@ from deepscholar.services.research_worker import (
     ResearchWorker,
 )
 from deepscholar.services.tool_router import ResearchToolPair, ResearchToolRouter
+from deepscholar.tools.github_fetcher import GitHubFetcher
+from deepscholar.tools.github_search import GitHubSearchTool
 from deepscholar.tools.web_fetch import (
     TavilyWebFetcher,
 )
@@ -109,6 +111,8 @@ def build_graph():
     tavily_fetcher = TavilyWebFetcher()
     arxiv_search = ArxivSearchTool()
     arxiv_fetcher = ArxivFetcher()
+    github_search = GitHubSearchTool()
+    github_fetcher = GitHubFetcher()
     tool_router = ResearchToolRouter(
         tools={
             SourceType.WEB: (
@@ -122,7 +126,11 @@ def build_graph():
                     search_tool=arxiv_search,
                     fetcher=arxiv_fetcher,
                 )
-            )
+            ),
+            SourceType.GITHUB: ResearchToolPair(
+                search_tool=github_search,
+                fetcher=github_fetcher,
+            ),
         }
     )
 

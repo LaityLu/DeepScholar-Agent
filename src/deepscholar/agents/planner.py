@@ -118,6 +118,16 @@ Use WEB for:
 - recent developments that may not yet
   appear in research papers
 
+Use GITHUB for:
+- open-source implementations
+- official repositories
+- released code
+- checkpoints
+- configuration
+- installation instructions
+- repository activity
+- implementation details
+
 
 Query generation rules:
 
@@ -166,6 +176,20 @@ Bad PAPER query examples:
 "Research GUI agents in 2025-2026"
 
 "latest multimodal GUI agent papers"
+
+For GITHUB tasks:
+- Generate concise repository-oriented keywords.
+- Prefer project names, model names, task names,
+  implementation terms, or framework names.
+- Do not generate full natural-language questions.
+
+Good examples:
+
+GUI agent multimodal
+computer use agent
+UI-TARS
+Mobile-Agent
+GUI agent reinforcement learning
 
 
 Planning requirements:

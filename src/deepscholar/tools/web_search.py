@@ -14,7 +14,15 @@ from deepscholar.tools.base import (
 
 
 class TavilyWebSearchTool(BaseSearchTool):
-    def __init__(self):
+    def __init__(
+        self,
+        max_retries: int = 3,
+        backoff_factor: float = 1.0,
+    ):
+        super().__init__(
+            max_retries=max_retries,
+            backoff_factor=backoff_factor,
+        )
         if settings.tavily_api_key is None:
             raise ValueError(
                 "TAVILY_API_KEY is not configured."
@@ -42,12 +50,14 @@ class TavilyWebSearchTool(BaseSearchTool):
                 "max_results must be "
                 "between 1 and 20."
             )
-        raw_response = self.client.search(
-            query=query,
-            search_depth="basic",
-            max_results=max_results,
-            include_answer=False,
-            include_raw_content=False,
+        raw_response = self._run_with_retry(
+            lambda: self.client.search(
+                query=query,
+                search_depth="basic",
+                max_results=max_results,
+                include_answer=False,
+                include_raw_content=False,
+            )
         )
         results = [
             self._normalize_result(item)

@@ -1,4 +1,10 @@
 import json
+from collections import defaultdict, deque
+from collections.abc import Callable, Mapping
+
+from transformers import AutoTokenizer
+
+from deepscholar.config import settings
 
 from deepscholar.llm.client import (
     LLMClient,
@@ -18,11 +24,53 @@ from deepscholar.utils.structured_output import clean_json_text
 
 class CriticAgent:
 
+    SYSTEM_MESSAGE = "You are a research coverage critic."
+
     def __init__(
         self,
         llm: LLMClient,
+        tokenizer=None,
+        max_context_tokens: int | None = None,
+        max_output_tokens: int = 600,
+        safety_margin_tokens: int = 128,
     ):
         self.llm = llm
+        self.max_context_tokens = (
+            settings.llm_max_context_tokens
+            if max_context_tokens is None
+            else max_context_tokens
+        )
+        self.max_output_tokens = max_output_tokens
+        self.safety_margin_tokens = safety_margin_tokens
+
+        if max_output_tokens <= 0:
+            raise ValueError(
+                "max_output_tokens must be positive."
+            )
+        if safety_margin_tokens < 0:
+            raise ValueError(
+                "safety_margin_tokens cannot be negative."
+            )
+        if (
+            self.max_context_tokens
+            <= max_output_tokens + safety_margin_tokens
+        ):
+            raise ValueError(
+                "No token budget remains for Critic input."
+            )
+
+        self.max_input_tokens = (
+            self.max_context_tokens
+            - max_output_tokens
+            - safety_margin_tokens
+        )
+        self.tokenizer = tokenizer or (
+            AutoTokenizer.from_pretrained(
+                settings.llm_tokenizer_path,
+                local_files_only=True,
+                trust_remote_code=True,
+            )
+        )
 
     def evaluate(
         self,
@@ -30,26 +78,22 @@ class CriticAgent:
         evidences: list[Evidence],
     ) -> CritiqueResult:
 
+        selected_evidences = self._select_evidences(
+            evidences=evidences,
+            build_prompt=lambda selected: self._build_prompt(
+                plan=plan,
+                evidences=selected,
+            ),
+        )
         prompt = self._build_prompt(
             plan=plan,
-            evidences=evidences,
+            evidences=selected_evidences,
         )
 
         content = self.llm.chat(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a research coverage critic."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
+            messages=self._build_messages(prompt),
             temperature=0,
-            max_tokens=800,
+            max_tokens=self.max_output_tokens,
         )
 
         # print(
@@ -64,7 +108,6 @@ class CriticAgent:
         return self._parse_result(
             data
         )
-
 
     def _build_prompt(
         self,
@@ -311,6 +354,191 @@ Requirements:
 Return JSON only.
 """.strip()
 
+    def _select_evidences(
+        self,
+        evidences: list[Evidence],
+        build_prompt: Callable[[list[Evidence]], str],
+    ) -> list[Evidence]:
+        empty_prompt = build_prompt([])
+        self._ensure_prompt_fits(empty_prompt)
+
+        selected: list[Evidence] = []
+
+        for evidence in self._prioritize_evidences(
+            evidences
+        ):
+            for content_tokens, quote_tokens in (
+                (512, 256),
+                (256, 128),
+                (128, 64),
+                (64, 32),
+            ):
+                compacted = self._compact_evidence(
+                    evidence,
+                    content_tokens=content_tokens,
+                    quote_tokens=quote_tokens,
+                )
+                candidate = [*selected, compacted]
+                if self._prompt_fits(
+                    build_prompt(candidate)
+                ):
+                    selected.append(compacted)
+                    break
+
+        omitted = len(evidences) - len(selected)
+        if omitted:
+            print(
+                f"[Critic] Token budget selected "
+                f"{len(selected)} of {len(evidences)} "
+                f"evidences; omitted {omitted}."
+            )
+
+        return selected
+
+    def _compact_evidence(
+        self,
+        evidence: Evidence,
+        content_tokens: int,
+        quote_tokens: int,
+    ) -> Evidence:
+        return evidence.model_copy(
+            update={
+                "title": self._truncate_text(
+                    evidence.title,
+                    128,
+                ),
+                "url": self._truncate_text(
+                    evidence.url,
+                    128,
+                ),
+                "content": self._truncate_text(
+                    evidence.content,
+                    content_tokens,
+                ),
+                "quote": self._truncate_text(
+                    evidence.quote or "",
+                    quote_tokens,
+                ),
+            }
+        )
+
+    def _prioritize_evidences(
+        self,
+        evidences: list[Evidence],
+    ) -> list[Evidence]:
+        grouped: dict[str, list[Evidence]] = defaultdict(list)
+        for evidence in evidences:
+            grouped[evidence.task_id].append(evidence)
+
+        queues = []
+        for group in grouped.values():
+            group.sort(
+                key=lambda item: (
+                    item.relevance_score
+                    if item.relevance_score is not None
+                    else -1.0
+                ),
+                reverse=True,
+            )
+            queues.append(deque(group))
+
+        prioritized = []
+        while queues:
+            next_queues = []
+            for queue in queues:
+                prioritized.append(queue.popleft())
+                if queue:
+                    next_queues.append(queue)
+            queues = next_queues
+
+        return prioritized
+
+    def _truncate_text(
+        self,
+        text: str,
+        max_tokens: int,
+    ) -> str:
+        token_ids = self.tokenizer.encode(
+            text,
+            add_special_tokens=False,
+        )
+        if len(token_ids) <= max_tokens:
+            return text
+        return self.tokenizer.decode(
+            token_ids[:max_tokens],
+            skip_special_tokens=True,
+        )
+
+    def _build_messages(
+        self,
+        prompt: str,
+    ) -> list[dict]:
+        return [
+            {
+                "role": "system",
+                "content": self.SYSTEM_MESSAGE,
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ]
+
+    def _count_prompt_tokens(
+        self,
+        prompt: str,
+    ) -> int:
+        messages = self._build_messages(prompt)
+        try:
+            token_ids = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            if isinstance(token_ids, Mapping):
+                token_ids = token_ids["input_ids"]
+            if hasattr(token_ids, "shape"):
+                return int(token_ids.shape[-1])
+            return len(token_ids)
+        except (AttributeError, TypeError, ValueError):
+            return (
+                sum(
+                    len(
+                        self.tokenizer.encode(
+                            message["content"],
+                            add_special_tokens=False,
+                        )
+                    )
+                    for message in messages
+                )
+                + 16
+            )
+
+    def _prompt_fits(
+        self,
+        prompt: str,
+    ) -> bool:
+        return (
+            self._count_prompt_tokens(prompt)
+            <= self.max_input_tokens
+        )
+
+    def _ensure_prompt_fits(
+        self,
+        prompt: str,
+    ) -> None:
+        prompt_tokens = self._count_prompt_tokens(
+            prompt
+        )
+        if prompt_tokens > self.max_input_tokens:
+            raise ValueError(
+                "Critic prompt instructions exceed the "
+                "available model input budget: "
+                f"{prompt_tokens} > "
+                f"{self.max_input_tokens} tokens."
+            )
+
     def _parse_result(
         self,
         data: dict,
@@ -361,33 +589,28 @@ Return JSON only.
         new_evidences: list[Evidence],
     ) -> CritiqueResult:
 
-        prompt = (
-            self._build_incremental_prompt(
-                plan=plan,
-                previous_critique=(
-                    previous_critique
-                ),
-                new_tasks=new_tasks,
-                new_evidences=new_evidences,
-            )
+        selected_evidences = self._select_evidences(
+            evidences=new_evidences,
+            build_prompt=lambda selected: (
+                self._build_incremental_prompt(
+                    plan=plan,
+                    previous_critique=previous_critique,
+                    new_tasks=new_tasks,
+                    new_evidences=selected,
+                )
+            ),
+        )
+        prompt = self._build_incremental_prompt(
+            plan=plan,
+            previous_critique=previous_critique,
+            new_tasks=new_tasks,
+            new_evidences=selected_evidences,
         )
 
         content = self.llm.chat(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a research "
-                        "coverage critic."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
+            messages=self._build_messages(prompt),
             temperature=0,
-            max_tokens=800,
+            max_tokens=self.max_output_tokens,
         )
 
         # print("\n===== Raw Incremental Critic Output =====")

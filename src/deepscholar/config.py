@@ -13,13 +13,12 @@ class Settings(BaseSettings):
     llm_tokenizer_path: str
     llm_max_context_tokens: int
     llm_max_output_tokens: int
+    github_token: SecretStr | None = None
+    embedding_model_path: str
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
-    embedding_model_path: str = (
-    "/home/DeepScholar-Agent/data/models/BAAI/bge-m3"
-    )
-
+    
 settings = Settings()
